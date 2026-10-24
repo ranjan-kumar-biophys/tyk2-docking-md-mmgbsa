@@ -1,0 +1,41 @@
+#!/bin/bash
+#PBS -N tyk2_bench
+#PBS -q gpuq
+#PBS -l select=1:ncpus=48:ngpus=2:host=gpu02
+#PBS -l place=excl
+#PBS -l walltime=00:30:00
+#PBS -j oe
+#PBS -o bench.out
+# Throughput test on gpu02 (2x L40S): how many 55k-atom simulations per GPU?
+cd $PBS_O_WORKDIR
+unset OMP_NUM_THREADS   # PBS sets it to ncpus; it would clash with mdrun -ntomp
+source /soft/apps/intel/oneapi/setvars.sh > /dev/null 2>&1
+module add gcc/9.2
+source /soft/apps/gromacs-gpu/bin/GMXRC.bash
+mkdir -p bench && cd bench
+SYS=../work/systems/lig_jmc_23
+cp ../mdp/em.mdp .
+gmx grompp -f em.mdp -c $SYS/complex.gro -p $SYS/complex.top -n $SYS/index.ndx -o em.tpr -maxwarn 0 > /dev/null 2>&1
+gmx mdrun -deffnm em -nb gpu -ntmpi 1 -ntomp 16 > /dev/null 2>&1
+sed -e 's/${DT}/0.002/; s/${NSTEPS}/50000/; s/${NSTXTC}/5000/; s/${TEMP} ${TEMP}/298.15 298.15/' \
+    -e 's/^continuation .*/continuation = no/; s/^gen-vel .*/gen-vel = yes\ngen-temp = 298.15\ngen-seed = 7/' ../mdp/prod.mdp > bench.mdp
+gmx grompp -f bench.mdp -c em.gro -p $SYS/complex.top -n $SYS/index.ndx -o bench.tpr -maxwarn 0 > /dev/null 2>&1 || { echo "grompp failed"; exit 1; }
+F="-s bench.tpr -nsteps 50000 -resethway -noconfout -nb gpu -pme gpu -bonded gpu -update gpu -ntmpi 1 -pin on -pinstride 1"
+run_set() {  # $1 = label, $2 = threads per run, then one gpu id per run
+  local label=$1 nt=$2; shift 2; local k=0
+  for g in "$@"; do
+    gmx mdrun $F -deffnm ${label}_$k -gpu_id $g -ntomp $nt -pinoffset $((k * nt)) > /dev/null 2>&1 &
+    k=$((k + 1))
+  done
+  wait
+  local tot=0
+  for ((i = 0; i < k; i++)); do
+    p=$(grep Performance: ${label}_$i.log | awk '{print $2}'); tot=$(echo "$tot + ${p:-0}" | bc)
+    echo "  $label run $i: ${p:-FAILED} ns/day"
+  done
+  echo "$label TOTAL: $tot ns/day"
+}
+run_set one 12 0
+run_set two_on_gpu0 12 0 0
+run_set four_2pergpu 12 0 0 1 1
+run_set six_3pergpu 8 0 0 0 1 1 1

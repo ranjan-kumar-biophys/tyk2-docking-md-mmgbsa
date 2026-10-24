@@ -1,0 +1,32 @@
+# Pipeline settings. Every script reads this file; change values here, not in the scripts.
+
+ligands: all            # "all", or a list such as [lig_jmc_23, lig_ejm_43]
+temperature_K: 298.15
+
+docking:
+  exhaustiveness: 32
+  n_poses: 9
+  box_size_A: 22.0      # cubic box centred on the reference ligands
+  seed: 42
+
+build:
+  start_pose: docked    # docked = realistic service pipeline; reference = benchmark pose (control)
+  water_padding_A: 10.0 # truncated octahedron, TIP3P
+  salt_M: 0.15
+
+md:
+  replicas: 3
+  nvt_ps: 100
+  npt_ps: 1000
+  production_ns: 10
+  dt_ps: 0.002
+  xtc_interval_ps: 10
+  mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu"   # CUDA build; set "" for CPU-only
+
+mmgbsa:
+  igb: 5
+  saltcon_M: 0.15
+  discard_ns: 5         # skip the first 5 ns of each replica
+  stride_frames: 5      # use every 5th frame (= every 50 ps)
+  mpi_procs: 4
+  decomp_ligands: [lig_jmc_23, lig_ejm_43]   # strongest and weakest binder

@@ -1,0 +1,88 @@
+#!/bin/bash
+#PBS -N tyk2_full
+#PBS -q gpuq
+#PBS -l select=1:ncpus=48:ngpus=2:host=gpu02
+#PBS -l place=excl
+#PBS -l walltime=48:00:00
+#PBS -j oe
+#PBS -o full.out
+# TYK2 pipeline on gpu02 (2x L40S, 48 cores): EM -> MD -> MM/GBSA -> analysis.
+# Work is handed out one task at a time from a list, so all workers stay busy.
+NW=2            # parallel MD workers, alternating GPU 0 / 1
+NT=24           # OpenMP threads per MD worker (NW * NT <= 48)
+MMW=48          # parallel serial gmx_MMPBSA runs (mpi_procs: 1 in config.yaml)
+
+cd $PBS_O_WORKDIR
+unset OMP_NUM_THREADS   # PBS sets it to ncpus; it would clash with mdrun -ntomp
+source ~/miniforge3/etc/profile.d/conda.sh
+conda activate $PWD/env
+export PATH="$PWD/bin:$CONDA_PREFIX/bin:$PATH"   # bin/gmx wraps the cluster's CUDA GROMACS
+export GMX=$PWD/bin/gmx
+rm -f DONE FAILED TASK_FAILED tasks_*.next
+fail() { echo "FAILED at $1 $(date)" > FAILED; exit 1; }
+stamp() { echo "$(date '+%F %T') $*"; }
+
+python - <<'PY'
+import pandas as pd, sys
+sys.path.insert(0, "scripts")
+from common import load_config, ligand_names
+main = ligand_names(load_config())
+d = pd.read_csv("results/docking.csv")
+control = list(d.loc[d.top_pose_rmsd_A > 2, "ligand"])
+units = [("docked", l) for l in main] + [("reference", l) for l in control]
+open("tasks_em.txt", "w").write("".join(f"{p} {l}\n" for p, l in units))
+open("tasks_md.txt", "w").write("".join(f"{p} {l} {r}\n" for r in (1, 2, 3) for p, l in units))
+PY
+
+next_task() {  # print the next unclaimed line of $1 (shared counter under flock)
+  local line
+  {
+    flock 9
+    local n; n=$(cat "$1.next" 2>/dev/null || echo 1)
+    line=$(sed -n "${n}p" "$1")
+    echo $((n + 1)) > "$1.next"
+  } 9> "$1.lock"
+  [ -n "$line" ] && echo "$line"
+}
+
+worker() {  # $1 = phase (em | md | mm), $2 = worker index
+  local phase=$1 w=$2 gpu=$(($2 % 2)) off=$(($2 * NT)) line
+  local file=tasks_$phase.txt; [ "$phase" = mm ] && file=tasks_md.txt
+  local flags="-ntomp $NT -pin on -pinoffset $off -pinstride 1"
+  while line=$(next_task $file.$phase); do
+    set -- $line
+    case $phase in
+      em) python scripts/05_run_md.py --pose $1 --ligands $2 --em-only --gpu-id $gpu --extra-flags "$flags" ;;
+      md) python scripts/05_run_md.py --pose $1 --ligands $2 --replicas $3 --gpu-id $gpu --extra-flags "$flags" ;;
+      mm) python scripts/06_mmgbsa.py --pose $1 --ligands $2 --replicas $3 ;;
+    esac >> logs/${phase}_worker$w.log 2>&1 || { echo "$phase task failed: $line" | tee -a TASK_FAILED; }
+  done
+}
+
+mkdir -p logs
+stamp "preflight: gmx_MMPBSA + wrapped gmx on the benchmark trajectory"
+( mkdir -p preflight && cd preflight &&
+  printf '&general\nstartframe=1, interval=1, PBRadii=3,\n/\n&gb\nigb=5, saltcon=0.15,\n/\n' > mm.in &&
+  gmx_MMPBSA -O -i mm.in -cs ../bench/bench.tpr -ci ../work/systems/lig_jmc_23/index.ndx -cg 1 2 \
+    -ct ../bench/one_0.xtc -cp ../work/systems/lig_jmc_23/complex.top -o pre.dat -nogui ) \
+  > logs/preflight.log 2>&1 && grep -q "ΔTOTAL" preflight/pre.dat || fail "preflight (see logs/preflight.log)"
+stamp "preflight ok: $(grep ΔTOTAL preflight/pre.dat | awk '{print $2}') kcal/mol"
+for phase in em md; do cp tasks_$phase.txt tasks_$phase.txt.$phase; done
+cp tasks_md.txt tasks_md.txt.mm
+
+stamp "EM: $(wc -l < tasks_em.txt) systems, $NW workers"
+for ((w = 0; w < NW; w++)); do worker em $w & done; wait
+[ -e TASK_FAILED ] && fail "EM (see TASK_FAILED, logs/)"
+
+stamp "MD: $(wc -l < tasks_md.txt) replicas, $NW workers x $NT threads"
+for ((w = 0; w < NW; w++)); do worker md $w & done; wait
+[ -e TASK_FAILED ] && fail "MD (see TASK_FAILED, logs/)"
+
+stamp "MM/GBSA: $MMW parallel serial runs"
+for ((w = 0; w < MMW; w++)); do worker mm $w & done; wait
+[ -e TASK_FAILED ] && fail "MM/GBSA (see TASK_FAILED, logs/)"
+
+stamp "analysis"
+python scripts/07_analyse.py > logs/analyse.log 2>&1 || fail "analysis (see logs/analyse.log)"
+stamp "done"
+echo "PIPELINE_DONE $(date)" > DONE

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Cluster CUDA GROMACS 2024 with its own runtime (oneAPI + gcc 9.2), kept out of the conda env.
+_tyk2_gmx_argv=("$@"); set --   # setvars.sh parses "$@" and uses its own $args, so stash ours
+source /etc/profile.d/modules.sh 2>/dev/null
+source /soft/apps/intel/oneapi/setvars.sh > /dev/null 2>&1
+module add gcc/9.2 2>/dev/null
+source /soft/apps/gromacs-gpu/bin/GMXRC.bash
+unset OMP_NUM_THREADS
+exec /soft/apps/gromacs-gpu/bin/gmx "${_tyk2_gmx_argv[@]}"

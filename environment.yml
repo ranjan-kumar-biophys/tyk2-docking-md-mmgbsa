@@ -1,0 +1,24 @@
+# Python + AmberTools side of the pipeline (docking, ligand params, MM/GBSA, analysis).
+# GROMACS is NOT in here: use your own GPU build (>=2022) and make sure `gmx` is on PATH.
+# Pins follow the gmx_MMPBSA 1.7.0 install guide.
+name: tyk2-pl
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - ambertools>=24.8,<27
+  - mpi4py>=4.0.1,<5
+  - numpy>=1.26.4,<2
+  - pandas>=2.2,<3
+  - scipy>=1.14.1,<2
+  - matplotlib>=3.8,<4
+  - seaborn>=0.13,<0.14
+  - rdkit
+  - openbabel
+  - meeko
+  - vina
+  - pyyaml
+  - pip
+  - pip:
+      - gmx_MMPBSA==1.7.0

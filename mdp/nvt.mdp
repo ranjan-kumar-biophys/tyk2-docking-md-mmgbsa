@@ -1,0 +1,25 @@
+; NVT equilibration, heavy atoms of protein + ligand restrained
+define                 = -DPOSRES
+integrator             = md
+dt                     = ${DT}
+nsteps                 = ${NSTEPS}
+nstenergy              = 5000
+nstlog                 = 5000
+continuation           = no
+constraints            = h-bonds
+constraint-algorithm   = lincs
+cutoff-scheme          = Verlet
+nstlist                = 10
+pbc                    = xyz
+coulombtype            = PME
+rcoulomb               = 1.0
+rvdw                   = 1.0
+DispCorr               = EnerPres
+tcoupl                 = V-rescale
+tc-grps                = Protein_LIG Water_and_ions
+tau-t                  = 0.1 0.1
+ref-t                  = ${TEMP} ${TEMP}
+pcoupl                 = no
+gen-vel                = yes
+gen-temp               = ${TEMP}
+gen-seed               = ${SEED}
