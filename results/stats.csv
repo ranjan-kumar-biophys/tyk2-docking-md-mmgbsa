@@ -1,0 +1,4 @@
+method,n,pearson_r,r_ci_low,r_ci_high,spearman_rho,rho_ci_low,rho_ci_high,kendall_tau
+Docking (Vina),13,0.112,-0.496,0.648,0.121,-0.542,0.687,0.051
+MD + MM/GBSA (docked poses),13,-0.131,-0.694,0.589,0.049,-0.575,0.670,0.051
+MD + MM/GBSA (docking failures re-run),13,0.583,0.281,0.823,0.538,0.014,0.852,0.385
